@@ -104,6 +104,7 @@ import locale
 import operator
 import string
 import time
+import logging
 
 import CellEditor
 import OLVEvent
@@ -282,7 +283,10 @@ class ObjectListView(wx.ListCtrl):
         self.Bind(wx.EVT_LIST_COL_BEGIN_DRAG, self._HandleColumnBeginDrag)
         self.Bind(wx.EVT_LIST_COL_END_DRAG, self._HandleColumnEndDrag)
         self.Bind(wx.EVT_MOUSEWHEEL, self._HandleMouseWheel)
-        self.Bind(wx.EVT_SCROLLWIN, self._HandleScroll)
+        # Scrolling events are generated only on the main window of the list, at least with
+        # the GTK backend. Note that access to scroll position etc. is also done by accessing
+        # the main window of the list.
+        self.GetMainWindow().Bind(wx.EVT_SCROLLWIN, self._HandleScroll)
         self.Bind(wx.EVT_SIZE, self._HandleSize)
 
         # When is this event triggered?
@@ -1092,7 +1096,14 @@ class ObjectListView(wx.ListCtrl):
         """
         # Because of sorting, index can't be used directly, which is
         # why we set the item data to be the real index
-        return self.innerList[self.GetItemData(index)]
+        try:
+            # Wenn der Benutzer in das OLV geklickt hat (nicht auf ein Item), kam eine C++-Exception
+            # angeflogen.
+            itemData = self.GetItemData(index)
+        except wx._core.PyAssertionError:
+            return None
+        else:
+            return self.innerList[itemData]
 
 
     def __getitem__(self, index):
@@ -1272,7 +1283,16 @@ class ObjectListView(wx.ListCtrl):
         rect = self.GetItemRect(rowIndex, wx.LIST_RECT_BOUNDS)
 
         if self.InReportView():
-            rect = [0-self.GetScrollPos(wx.HORIZONTAL), rect.Y, 0, rect.Height]
+            if wx.Platform == "__WXMSW__":
+                rect = [0-self.GetScrollPos(wx.HORIZONTAL), rect.Y, 0, rect.Height]
+            else:
+                # Dieser Fix ist für Linux notwendig, geht aber unter Windows
+                # nicht.
+                # http://thread.gmane.org/gmane.comp.python.wxpython/80361
+                scrollFactor = self.GetMainWindow().GetScrollPixelsPerUnit()[0]
+                scrolledX = self.GetScrollPos(wx.HORIZONTAL) * scrollFactor
+                rect = [0-scrolledX, rect.Y, 0, rect.Height]
+
             for i in range(subItemIndex+1):
                 rect[0] += rect[2]
                 rect[2] = self.GetColumnWidth(i)
@@ -1317,7 +1337,8 @@ class ObjectListView(wx.ListCtrl):
 
         # Find which subitem is hit
         right = 0
-        scrolledX = self.GetScrollPos(wx.HORIZONTAL) + pt.x
+        scrollFactor = self.GetMainWindow().GetScrollPixelsPerUnit()[0]
+        scrolledX = self.GetScrollPos(wx.HORIZONTAL) * scrollFactor + pt.x
         for i in range(self.GetColumnCount()):
             left = right
             right += self.GetColumnWidth(i)
@@ -2251,7 +2272,8 @@ class AbstractVirtualObjectListView(ObjectListView):
         """
         # We can only refresh everything
         self.lastGetObjectIndex = -1
-        self.RefreshItems(0, max(0, self.GetItemCount()-1))
+        if self.GetItemCount() > 0:
+            self.RefreshItems(0, max(0, self.GetItemCount() - 1))
         #self.Refresh()
 
 
@@ -2517,7 +2539,8 @@ class FastObjectListView(AbstractVirtualObjectListView):
                 if idx != -1:
                     self.RefreshItem(idx)
         else:
-            self.RefreshItems(0, self.GetItemCount() - 1)
+            if self.GetItemCount() > 0:
+                self.RefreshItems(0, self.GetItemCount() - 1)
 
     #----------------------------------------------------------------------------
     #  Accessing
@@ -2594,6 +2617,7 @@ class GroupListView(FastObjectListView):
             If it is changed, SetColumns() must be called again.
         """
         self.groups = list()
+        self._set_groups_directly = False # indicate if groups were set by SetGroups() directly instead building'em from attribute
         self.showGroups = True
         self.putBlankLineBetweenGroups = True
         self.alwaysGroupByColumnIndex = -1
@@ -2773,6 +2797,7 @@ class GroupListView(FastObjectListView):
 
         Calling this automatically put the control into ShowGroup mode
         """
+        self._set_groups_directly = True
         self.modelObjects = list()
         self.SetShowGroups(True)
         self._SetGroups(groups)
@@ -2865,10 +2890,15 @@ class GroupListView(FastObjectListView):
         if not self.showGroups:
             return ObjectListView._BuildInnerList(self)
 
-        if not self.modelObjects:
-            self.groups = list()
-            self.innerList = list()
-            return
+        # leave an empty list if no modelobjects are there
+        # or there are no ListGroup objects with given modelobjects
+        if not self.modelObjects and (\
+            not self.groups or \
+            not isinstance(self.groups, (list, tuple)) or \
+            all(map(lambda x: len(x.modelObjects) <= 0, self.groups))):
+                self.groups = list()
+                self.innerList = list()
+                return
 
         if self.groups is None:
             self.groups = self._BuildGroups()
@@ -2880,7 +2910,11 @@ class GroupListView(FastObjectListView):
                 self.innerList.append(None)
             self.innerList.append(grp)
             if grp.isExpanded:
-                self.innerList.extend(grp.modelObjects)
+                if self.filter:
+                    self.innerList.extend(self.filter(grp.modelObjects))
+                else:
+                    self.innerList.extend(grp.modelObjects)
+                
 
     #----------------------------------------------------------------------------
     # Virtual list callbacks.
@@ -3190,7 +3224,7 @@ class GroupListView(FastObjectListView):
         """
 
         # If they click on a new column, we have to rebuild our groups
-        if evt.GetColumn() != self.sortColumnIndex:
+        if not self._set_groups_directly and evt.GetColumn() != self.sortColumnIndex:
             self.groups = None
 
         FastObjectListView._HandleColumnClick(self, evt)
@@ -3615,7 +3649,7 @@ class ColumnDefn(object):
             return value.strftime(self.stringConverter)
 
         # By default, None is changed to an empty string.
-        if not converter and not value:
+        if not converter and value is None:
             return ""
 
         fmt = converter or "%s"
@@ -3736,8 +3770,9 @@ class ColumnDefn(object):
         # property on modelObject. Try to set, realising that many things could still go wrong.
         try:
             setattr(modelObject, munger, value)
-        except:
-            pass
+        except Exception, e:
+            logging.warn("'[%s] %s' happend while trying to do 'setattr(%s, %s, %s)'"
+                         % (type(e).__name__, unicode(e), unicode(modelObject_), unicode(munger_), unicode(value)))
 
 
     def _Munge(self, modelObject, munger):
@@ -3775,18 +3810,24 @@ class ColumnDefn(object):
             # Happens when munger is not a string
             pass
 
+        cached_warning = None
+
         # Use the callable directly, if possible.
         # In accordance with Guido's rules for Python 3, we just call it and catch the
         # exception
-        try:
-            return munger(modelObject)
-        except TypeError:
-            pass
+        # Here we break with the Guidoism to get warnings if munger has a wrong number of arguments.
+        if hasattr(munger, "__call__"):
+            try:
+                return munger(modelObject)
+            except TypeError, e:
+                cached_warning = "'[%s] %s' happend while trying to do '%s(%s)'" % (type(e).__name__, unicode(e), unicode(munger), unicode(modelObject))
 
         # Try dictionary-like indexing
         try:
             return modelObject[munger]
         except:
+            if cached_warning is not None:
+                logging.warn(cached_warning)
             return None
 
     #-------------------------------------------------------------------------------

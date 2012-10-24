@@ -588,7 +588,12 @@ class ListCtrlPrintout(wx.Printout):
             if printer.Print(parent, self, True):
                 self.printData = wx.PrintData(printer.GetPrintDialogData().GetPrintData())
             else:
-                wx.MessageBox("There was a problem printing.\nPerhaps your current printer is not set correctly?", "Printing", wx.OK)
+                with wx.MessageDialog(parent=parent,
+                                      message="There was a problem printing.\n"
+                                              "Perhaps your current printer is not set correctly?",
+                                      caption="Printing",
+                                      style=wx.OK | wx.ICON_ERROR) as dlg:
+                    dlg.ShowModal()
         finally:
             pdd.Destroy()
 
@@ -2514,7 +2519,7 @@ class WatermarkDecoration(Decoration):
         """
         """
         self.text = text
-        self.color = color or wx.Color(128, 128, 128, 128)
+        self.color = color or wx.Colour(128, 128, 128, 128)
         self.font = font or wx.FFont(128, wx.SWISS, 0)
         self.angle = angle
         self.over = over

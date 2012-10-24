@@ -128,8 +128,12 @@ class OLVPrinter(wx.Printout):
         if printer.Print(parent, self, True):
             self.printData = wx.PrintData(printer.GetPrintDialogData().GetPrintData())
         else:
-            wx.MessageBox("There was a problem printing.\nPerhaps your current printer is not set correctly?", "Printing", wx.OK)
-
+            with wx.MessageDialog(parent=parent,
+                                  message="There was a problem printing.\n"
+                                          "Perhaps your current printer is not set correctly?",
+                                  caption="Printing",
+                                  style=wx.OK | wx.ICON_ERROR) as dlg:
+                dlg.ShowModal()
         printout.Destroy()
 
 
