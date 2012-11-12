@@ -3772,7 +3772,7 @@ class ColumnDefn(object):
             setattr(modelObject, munger, value)
         except Exception, e:
             logging.warn("'[%s] %s' happend while trying to do 'setattr(%s, %s, %s)'"
-                         % (type(e).__name__, unicode(e), unicode(modelObject_), unicode(munger_), unicode(value)))
+                         % (type(e).__name__, unicode(e), unicode(modelObject), unicode(munger), unicode(value)))
 
 
     def _Munge(self, modelObject, munger):
