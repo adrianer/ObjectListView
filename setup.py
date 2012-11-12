@@ -1,7 +1,7 @@
 import sys
 
 NAME = "ObjectListView"
-VERSION = "1.2.2012.10.24"
+VERSION = "1.2.2012.11.12"
 URL = "http://objectlistview.sourceforge.net/python"
 DOWNLOAD_URL = "http://objectlistview.sourceforge.net/samples/ObjectListView-1.2.zip"
 LICENSE = "wxWindows"
